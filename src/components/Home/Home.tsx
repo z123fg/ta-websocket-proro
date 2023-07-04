@@ -13,7 +13,7 @@ interface Room {
 interface User {
     id: string;
     username: string;
-    ICE?: string;
+    ICEOffer?: string;
     lastLogin?: Date;
     lastActive?: Date;
     online?: boolean;
@@ -21,7 +21,7 @@ interface User {
     room?: Room;
 }
 const Home = () => {
-    const { user: curUser, login, signup, signout } = useContext(UserContext);
+    const { user: curUser, login, signup, signout,pc } = useContext(UserContext);
     const [socket, setSocket] = useState<Socket | null>(null);
     const [rooms, setRooms] = useState<Room[]>([]);
     const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
@@ -32,6 +32,7 @@ const Home = () => {
     const currentRoom = onlineUsers.find((user) => user.id === curUser.userId)?.room;
 
     const isLogin = !(curUser.token === null);
+    console.log("curUser", curUser)
     useEffect(() => {
         if (!curUser.token) return;
         const socket = io("http://localhost:3002", {
@@ -43,6 +44,18 @@ const Home = () => {
     }, [curUser]);
 
     useEffect(() => {
+        if(!curUser.token) return
+        onlineUsers.filter(user=>user.id !== curUser.userId).forEach(user=>{
+            if(user.id > curUser.userId!){
+                if(!!!user.ICEOffer) return
+                pc.setRemoteDescription(JSON.parse(user.ICEOffer))
+            }else{
+
+            }
+        })
+    }, [onlineUsers])
+
+    useEffect(() => {
         if (!socket) {
             //alert("ws is not connected");
             setIsConnecting(true);
@@ -52,7 +65,9 @@ const Home = () => {
         const onConnect = () => {
             console.log("connect");
         };
-        const onUpdateOnlineUser = (users: User[]) => {
+        const onUpdateOnlineUsers = (users: User[]) => {
+            console.log("users", users);
+
             setOnlineUsers(users);
         };
 
@@ -71,10 +86,11 @@ const Home = () => {
         };
         const onLobby = () => {};
         console.log("trying to connect");
+        
         socket.on("connect", onConnect);
         socket.on("connect_error", onConnectError);
         socket.on("disconnect", onDisconnect);
-        socket.on("updateonlineusers", onUpdateOnlineUser);
+        socket.on("updateonlineusers", onUpdateOnlineUsers);
         socket.on("updaterooms", onUpdateRooms);
         socket.on("lobby", onLobby);
         socket.on("updaterooms", onUpdateRooms);
@@ -83,7 +99,7 @@ const Home = () => {
             socket.off("connect_error", onConnectError);
             socket.off("connect", onConnect);
             socket.off("disconnect", onDisconnect);
-            socket.off("updateonlineusers", onUpdateOnlineUser);
+            socket.off("updateonlineusers", onUpdateOnlineUsers);
             socket.off("updaterooms", onUpdateRooms);
             socket.off("lobby", onLobby);
             socket.off("updaterooms", onUpdateRooms);

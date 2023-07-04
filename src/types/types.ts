@@ -16,4 +16,5 @@ export interface IUserContext {
     login: (user: IAuthForm) =>void;
     signup: (user: IAuthForm) =>void;
     signout: (user: IAuthForm) =>void;
+    pc: RTCPeerConnection
 }
