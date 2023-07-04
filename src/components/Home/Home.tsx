@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import UserContext from "../../contexts/userContext";
 import { Navigate } from "react-router-dom";
 import { Socket, io } from "socket.io-client";
+import { Server } from "http";
 interface Room {
     id: string;
     roomName: string;
@@ -20,19 +21,44 @@ interface User {
     createdRooms?: Room[];
     room?: Room;
 }
+
+const servers = {
+    iceServers: [
+        {
+            urls: ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"],
+        },
+    ],
+    iceCandidatePoolSize: 10,
+};
+
+interface IPeerConnectionMap {
+    [id: string]: { peerConnection: RTCPeerConnection; localDescription: RTCSessionDescriptionInit };
+}
+interface ICE {
+    id: string;
+    sessionDescriptionString: string;
+    target: User;
+    owner: User;
+}
+
+export interface ISessionDescriptionMap {
+    [id: string]: string;
+}
 const Home = () => {
-    const { user: curUser, login, signup, signout,pc } = useContext(UserContext);
+    const { user: curUser, login, signup, signout } = useContext(UserContext);
     const [socket, setSocket] = useState<Socket | null>(null);
     const [rooms, setRooms] = useState<Room[]>([]);
     const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
     const [joinRoomName, setJoinRoomName] = useState("");
     const [createRoomName, setCreateRoomName] = useState("");
     const [isConnecting, setIsConnecting] = useState(false);
+    const [peerConnectionMap, setPeerConnectionMap] = useState<IPeerConnectionMap>({});
+    const [totalICEs, setTotalICEs] = useState<ICE[]>([]);
 
     const currentRoom = onlineUsers.find((user) => user.id === curUser.userId)?.room;
 
     const isLogin = !(curUser.token === null);
-    console.log("curUser", curUser)
+    console.log("curUser", curUser);
     useEffect(() => {
         if (!curUser.token) return;
         const socket = io("http://localhost:3002", {
@@ -44,16 +70,72 @@ const Home = () => {
     }, [curUser]);
 
     useEffect(() => {
-        if(!curUser.token) return
-        onlineUsers.filter(user=>user.id !== curUser.userId).forEach(user=>{
-            if(user.id > curUser.userId!){
-                if(!!!user.ICEOffer) return
-                pc.setRemoteDescription(JSON.parse(user.ICEOffer))
-            }else{
-
+        (async () => {
+            if (!curUser.token) return;
+            const newPeerConnectionMap: IPeerConnectionMap = {};
+            if (
+                JSON.stringify(Object.keys(peerConnectionMap)) ===
+                JSON.stringify(onlineUsers.map((user) => user.id))
+            ) {
+                return;
             }
-        })
-    }, [onlineUsers])
+            let exclusiveOnlineUser = onlineUsers.filter((user) => user.id !== curUser.userId && user);
+            for (let user of exclusiveOnlineUser) {
+                const peerConnection =
+                    peerConnectionMap[user.id]?.peerConnection || new RTCPeerConnection(servers);
+                let localDescription/*  =
+                    peerConnectionMap[user.id]?.localDescription ||
+                    (user.id < curUser.userId! ? await peerConnection.createOffer() : null); */
+                    if(user.id <)
+                newPeerConnectionMap[user.id] = {
+                    localDescription,
+                    peerConnection,
+                };
+            }
+            setPeerConnectionMap(newPeerConnectionMap);
+
+            /*  onlineUsers.forEach((user) => {
+                const peerConnection = peerConnectionMap[user.id]?.peerConnection || new RTCPeerConnection(servers);
+                const localDescription = peerConnectionMap[user.id]?.localDescription || (user.id > curUser.userId? await peerConnection.createAnswer() : )
+            newPeerConnectionMap[user.id] = {
+                peerConnection,
+                localDescription
+            };
+        }); */
+        })();
+    }, [onlineUsers]);
+
+    useEffect(() => {
+        const sessionDescriptionMap: ISessionDescriptionMap = Object.fromEntries(
+            Object.entries(peerConnectionMap).map(([id, obj]) => {
+                return [id, JSON.stringify(obj.localDescription)];
+            })
+        );
+        socket?.emit("updatelocalice", curUser.userId, sessionDescriptionMap);
+    }, [peerConnectionMap]);
+
+    useEffect(() => {
+        let newPeerConnectionMap: IPeerConnectionMap = {};
+        totalICEs
+            .filter(({ target }) => {
+                return target.id === curUser.userId;
+            })
+            .forEach(async ({ owner, sessionDescriptionString }) => {
+                const peerConnection = peerConnectionMap[owner.id].peerConnection;
+                if (owner.id > curUser.userId!) {
+                    peerConnection.setRemoteDescription(JSON.parse(sessionDescriptionString));
+                    const myAnswer = await peerConnection.createAnswer();
+                    peerConnection.setLocalDescription(myAnswer);
+                    newPeerConnectionMap[owner.id] = { peerConnection, localDescription: myAnswer };
+                } else if (owner.id < curUser.userId!) {
+                    peerConnection.setRemoteDescription(JSON.parse(sessionDescriptionString));
+                }
+            });
+
+        if (Object.keys(newPeerConnectionMap).length !== 0) {
+            setPeerConnectionMap((prev) => ({ ...prev, ...newPeerConnectionMap }));
+        }
+    }, [totalICEs]);
 
     useEffect(() => {
         if (!socket) {
@@ -78,15 +160,19 @@ const Home = () => {
             console.log("disconnect");
         };
         const onConnectError = (err: any) => {
-            alert("connection error, reason:" + err)
+            alert("connection error, reason:" + err);
         };
 
         const onError = (err: any) => {
             alert(err);
         };
         const onLobby = () => {};
+
+        const onUpdateICEs = (ICEs: ICE[]) => {
+            setTotalICEs(ICEs);
+        };
         console.log("trying to connect");
-        
+        socket.on("updateices", onUpdateICEs);
         socket.on("connect", onConnect);
         socket.on("connect_error", onConnectError);
         socket.on("disconnect", onDisconnect);
@@ -96,6 +182,8 @@ const Home = () => {
         socket.on("updaterooms", onUpdateRooms);
         socket.on("error", onError);
         return () => {
+            socket.off("updateices", onUpdateICEs);
+
             socket.off("connect_error", onConnectError);
             socket.off("connect", onConnect);
             socket.off("disconnect", onDisconnect);
@@ -111,7 +199,9 @@ const Home = () => {
             alert("ws is not connected");
             return;
         }
-        socket.emit("joinroom", joinRoomName, (res:any)=>{console.log("res", res)});
+        socket.emit("joinroom", joinRoomName, (res: any) => {
+            console.log("res", res);
+        });
     };
 
     const handleCreateRoom = () => {

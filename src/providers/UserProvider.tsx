@@ -5,7 +5,7 @@ import loginAPI from "../services/login";
 
 import { IAuthForm, UserInfo } from "../types/types";
 import signupAPI from "../services/signup";
-import { createPeerConnection,  } from "../utils/peerConnection";
+import { createPeerConnection } from "../utils/peerConnection";
 interface UserProviderProps {
     children: ReactNode;
 }
@@ -17,9 +17,13 @@ const UserProvider: FC<UserProviderProps> = ({ children }) => {
 
     const login = async (user: IAuthForm) => {
         try {
-            const myOffer = await pc.createOffer()
-            const myAnswer = await pc.createAnswer()
-            const res = await loginAPI({...user, ICEOffer: JSON.stringify(myOffer), ICEAnswer: JSON.stringify(myAnswer)});
+            const myOffer = ""; //await pc.createOffer()
+            const myAnswer = ""; //await pc.createAnswer()
+            const res = await loginAPI({
+                ...user,
+                ICEOffer: JSON.stringify(myOffer),
+                ICEAnswer: JSON.stringify(myAnswer),
+            });
             //pc.setLocalDescription
             setUser(res.user);
             navigate("/home");
@@ -41,7 +45,7 @@ const UserProvider: FC<UserProviderProps> = ({ children }) => {
         setUser({ username: null, token: null, userId: null });
         navigate("/login");
     };
-    return <UserContext.Provider value={{ user, login, signup, signout, pc }}>{children}</UserContext.Provider>;
+    return <UserContext.Provider value={{ user, login, signup, signout }}>{children}</UserContext.Provider>;
 };
 
 export default UserProvider;

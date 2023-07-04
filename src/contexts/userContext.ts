@@ -8,7 +8,8 @@ const initValue = {
     },
     login: () => {},
     signup: () => {},
-    signout: () => {}
+    signout: () => {},
+    
 }
 
 const UserContext = createContext<IUserContext>(initValue);
