@@ -1,8 +1,9 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import UserContext from "../../contexts/userContext";
 import { Navigate } from "react-router-dom";
 import { Socket, io } from "socket.io-client";
 import { Server } from "http";
+import { throttle, debounce } from "lodash";
 interface Room {
     id: string;
     roomName: string;
@@ -32,10 +33,10 @@ const servers = {
 };
 
 interface IPeerConnectionMap {
-    [id: string]: { peerConnection: RTCPeerConnection; localDescription: RTCSessionDescriptionInit };
+    [id: string]: RTCPeerConnection & { dc: any };
 }
-interface ICE {
-    id: string;
+interface SessionDescription {
+    id?: string;
     sessionDescriptionString: string;
     target: User;
     owner: User;
@@ -53,12 +54,41 @@ const Home = () => {
     const [createRoomName, setCreateRoomName] = useState("");
     const [isConnecting, setIsConnecting] = useState(false);
     const [peerConnectionMap, setPeerConnectionMap] = useState<IPeerConnectionMap>({});
-    const [totalICEs, setTotalICEs] = useState<ICE[]>([]);
+    const [totalSDs, setTotalSDs] = useState<SessionDescription[]>([]);
+    const [targetSDs, setTargetSDs] = useState(totalSDs.filter((item) => item.target.id === curUser.userId));
+    const tempRef = useRef({ peerConnectionMap, targetSDs });
+    const currentRoom = useMemo(()=>onlineUsers.find((user) => user.id === curUser.userId)?.room,[onlineUsers]);
 
-    const currentRoom = onlineUsers.find((user) => user.id === curUser.userId)?.room;
+    const debounceSetState = useCallback(
+        debounce(() => {
+            console.log("debounce");
+            setPeerConnectionMap(tempRef.current.peerConnectionMap);
+            setTargetSDs(tempRef.current.targetSDs);
+        }, 2000),
+        [setTargetSDs, setPeerConnectionMap]
+    );
 
+    const setStates = (newPCMap?: any, newTargetSD?: any) => {
+        newPCMap && (tempRef.current.peerConnectionMap = newPCMap);
+        newTargetSD && (tempRef.current.targetSDs = newTargetSD);
+        debounceSetState();
+    };
+
+    useEffect(() => {
+        setStates(
+            undefined,
+            totalSDs.filter((item) => item.target.id === curUser.userId)
+        );
+    }, [totalSDs]);
+
+    //remote session descriptions that is for this client to connect
+    //console.log("totalSDs", totalSDs);
+
+    const roomUsers = useMemo(
+        () => onlineUsers.filter((user) => user.room?.roomName === currentRoom?.roomName),
+        [currentRoom, onlineUsers]
+    );
     const isLogin = !(curUser.token === null);
-    console.log("curUser", curUser);
     useEffect(() => {
         if (!curUser.token) return;
         const socket = io("http://localhost:3002", {
@@ -70,72 +100,107 @@ const Home = () => {
     }, [curUser]);
 
     useEffect(() => {
-        (async () => {
-            if (!curUser.token) return;
-            const newPeerConnectionMap: IPeerConnectionMap = {};
-            if (
-                JSON.stringify(Object.keys(peerConnectionMap)) ===
-                JSON.stringify(onlineUsers.map((user) => user.id))
-            ) {
-                return;
-            }
-            let exclusiveOnlineUser = onlineUsers.filter((user) => user.id !== curUser.userId && user);
-            for (let user of exclusiveOnlineUser) {
-                const peerConnection =
-                    peerConnectionMap[user.id]?.peerConnection || new RTCPeerConnection(servers);
-                let localDescription/*  =
-                    peerConnectionMap[user.id]?.localDescription ||
-                    (user.id < curUser.userId! ? await peerConnection.createOffer() : null); */
-                    if(user.id <)
-                newPeerConnectionMap[user.id] = {
-                    localDescription,
-                    peerConnection,
-                };
-            }
-            setPeerConnectionMap(newPeerConnectionMap);
-
-            /*  onlineUsers.forEach((user) => {
-                const peerConnection = peerConnectionMap[user.id]?.peerConnection || new RTCPeerConnection(servers);
-                const localDescription = peerConnectionMap[user.id]?.localDescription || (user.id > curUser.userId? await peerConnection.createAnswer() : )
-            newPeerConnectionMap[user.id] = {
-                peerConnection,
-                localDescription
-            };
-        }); */
-        })();
-    }, [onlineUsers]);
-
-    useEffect(() => {
-        const sessionDescriptionMap: ISessionDescriptionMap = Object.fromEntries(
-            Object.entries(peerConnectionMap).map(([id, obj]) => {
-                return [id, JSON.stringify(obj.localDescription)];
-            })
-        );
-        socket?.emit("updatelocalice", curUser.userId, sessionDescriptionMap);
-    }, [peerConnectionMap]);
-
-    useEffect(() => {
-        let newPeerConnectionMap: IPeerConnectionMap = {};
-        totalICEs
-            .filter(({ target }) => {
-                return target.id === curUser.userId;
-            })
-            .forEach(async ({ owner, sessionDescriptionString }) => {
-                const peerConnection = peerConnectionMap[owner.id].peerConnection;
-                if (owner.id > curUser.userId!) {
-                    peerConnection.setRemoteDescription(JSON.parse(sessionDescriptionString));
-                    const myAnswer = await peerConnection.createAnswer();
-                    peerConnection.setLocalDescription(myAnswer);
-                    newPeerConnectionMap[owner.id] = { peerConnection, localDescription: myAnswer };
-                } else if (owner.id < curUser.userId!) {
-                    peerConnection.setRemoteDescription(JSON.parse(sessionDescriptionString));
-                }
+        const timeout = setInterval(() => {
+            Object.entries(peerConnectionMap).forEach(([id, pc]) => {
+                console.log("state", id, pc.connectionState, totalSDs, peerConnectionMap);
             });
+        }, 2000);
+        return () => clearInterval(timeout);
+    }, [peerConnectionMap, totalSDs]);
 
-        if (Object.keys(newPeerConnectionMap).length !== 0) {
-            setPeerConnectionMap((prev) => ({ ...prev, ...newPeerConnectionMap }));
+
+    useEffect(() => {
+        const newPeerConnectionMap: IPeerConnectionMap = {};
+        const exclusiveUsers: User[] = roomUsers.filter((user) => user.id !== curUser.userId);
+        console.log("pm", peerConnectionMap)
+        for (let user of exclusiveUsers) {
+            let pc: RTCPeerConnection;
+            if (user.id in peerConnectionMap) {
+                pc = peerConnectionMap[user.id];
+                const state = pc.connectionState;
+                if (state === "failed" || state === "disconnected") {
+                    pc.close();
+                    pc = new RTCPeerConnection(servers);
+                } else if (state === "closed") {
+                    pc = new RTCPeerConnection(servers);
+                }
+            } else {
+                pc = new RTCPeerConnection(servers);
+            }
+            newPeerConnectionMap[user.id] = peerConnectionMap[user.id] ?? new RTCPeerConnection();
         }
-    }, [totalICEs]);
+
+        Object.entries(peerConnectionMap).forEach(([id, pc])=>{
+            if(!(id in newPeerConnectionMap)){
+                pc.close()
+            }
+        });
+        console.log("pm2", newPeerConnectionMap)
+        setStates(newPeerConnectionMap, undefined);
+    }, [roomUsers]);
+
+    useEffect(() => {
+        (async () => {
+            const newOwnerSDMap: ISessionDescriptionMap = {};
+            const targetSDsMap = Object.fromEntries(
+                targetSDs.map(({ target, owner, sessionDescriptionString }) => {
+                    return [owner.id, sessionDescriptionString];
+                })
+            );
+            //console.log("effect", peerConnectionMap, targetSDs);
+            await Promise.all(
+                Object.entries(peerConnectionMap).map(
+                    ([id, pc]) =>
+                        new Promise<void>(async (res, rej) => {
+                            const remoteDescription = targetSDsMap[id];
+                            if (id > curUser.userId!) {
+                                //console.log("greater", pc.remoteDescription, remoteDescription);
+                                if (pc.remoteDescription === null && remoteDescription !== undefined) {
+                                    await pc.setRemoteDescription(JSON.parse(remoteDescription));
+                                    const myAnswer = await pc.createAnswer();
+                                    pc.ondatachannel = (e: any) => {
+                                        pc.dc = e.channel;
+                                        pc.dc.onmessage = () => {
+                                            console.log("meesage");
+                                        };
+                                        pc.dc.onopen = () => {
+                                            console.log("open");
+                                        };
+                                    };
+                                    pc.onicecandidate = () => {
+                                        newOwnerSDMap[id] = JSON.stringify(pc.localDescription);
+                                        res();
+                                    };
+                                    await pc.setLocalDescription(myAnswer);
+                                } else {
+                                    res();
+                                }
+                            } else if (id < curUser.userId!) {
+                               // console.log("smaller", pc.localDescription);
+                                if (pc.localDescription === null) {
+                                    const dc = pc.createDataChannel("dc1");
+                                    pc.onicecandidate = () => {
+                                        newOwnerSDMap[id] = JSON.stringify(pc.localDescription);
+                                        res();
+                                    };
+                                    const myOffer = await pc.createOffer();
+                                    await pc.setLocalDescription(myOffer);
+                                } else {
+                                    if (pc.remoteDescription === null && remoteDescription !== undefined) {
+                                        await pc.setRemoteDescription(JSON.parse(remoteDescription));
+                                    }
+                                    res();
+                                }
+                            }
+                        })
+                )
+            );
+
+            if (Object.keys(newOwnerSDMap).length !== 0) {
+                socket!.emit("updateownersessiondescriptions", newOwnerSDMap);
+            }
+        })();
+    }, [peerConnectionMap, targetSDs]);
 
     useEffect(() => {
         if (!socket) {
@@ -168,21 +233,20 @@ const Home = () => {
         };
         const onLobby = () => {};
 
-        const onUpdateICEs = (ICEs: ICE[]) => {
-            setTotalICEs(ICEs);
+        const onUpdateTargetSessionDescription = (SDs: SessionDescription[]) => {
+            setTotalSDs(SDs);
         };
         console.log("trying to connect");
-        socket.on("updateices", onUpdateICEs);
+        socket.on("updatetargetsessiondescriptions", onUpdateTargetSessionDescription);
         socket.on("connect", onConnect);
         socket.on("connect_error", onConnectError);
         socket.on("disconnect", onDisconnect);
         socket.on("updateonlineusers", onUpdateOnlineUsers);
         socket.on("updaterooms", onUpdateRooms);
         socket.on("lobby", onLobby);
-        socket.on("updaterooms", onUpdateRooms);
         socket.on("error", onError);
         return () => {
-            socket.off("updateices", onUpdateICEs);
+            socket.off("updatetargetsessiondescriptions", onUpdateTargetSessionDescription);
 
             socket.off("connect_error", onConnectError);
             socket.off("connect", onConnect);
@@ -201,6 +265,7 @@ const Home = () => {
         }
         socket.emit("joinroom", joinRoomName, (res: any) => {
             console.log("res", res);
+            setPeerConnectionMap({})
         });
     };
 
