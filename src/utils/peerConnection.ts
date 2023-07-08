@@ -1,111 +1,124 @@
-class PeerConnection {
-    pc: RTCPeerConnection | undefined;
-    isMaster: boolean;
-    state: string;
-    timeout: number;
+export class PeerConnection {
+    private pc: RTCPeerConnection | undefined;
+    readonly isMaster: boolean;
+    private _state: string;
+    readonly timeout: number;
     dc: RTCDataChannel | null = null;
-    onUpdateIce: Function;
+    readonly onUpdateLD: Function;
+    readonly maxRetry: number;
+    private retry = 0;
+    readonly owner: number;
+    readonly target: number;
     static server: Object;
     constructor(
-        isMaster: boolean,
-        { timeout, onUpdateIce } = { timeout: 3000, onUpdateIce: () => {} }
+        owner: number,
+        target: number,
+
+        { timeout, onUpdateLD, maxRetry } = { timeout: 3000, onUpdateLD: () => {}, maxRetry: 3 }
     ) {
-        this.isMaster = isMaster;
-        this.state = "pending";
+        this.owner = owner;
+        this.target = target;
+        this.isMaster = owner > target;
+        this._state = "pending";
         this.timeout = timeout;
-        this.onUpdateIce = onUpdateIce;
+        this.onUpdateLD = onUpdateLD;
+        this.maxRetry = maxRetry;
         this.init();
     }
-
-    init() {
-        this.pc = new RTCPeerConnection();
-        if (this.isMaster) this.dc = this.pc.createDataChannel("dc");
-        this.state = "pending";
+    get state() {
+        return this._state;
     }
 
-    initListener() {
-        this.pc!.onconnectionstatechange = () => {
-            const state = this.pc!.connectionState;
-            this.state = state;
-            if (state === "disconnected" || state === "failed") {
-            }
-        };
+    getLabel() {
+        return `from ${this.isMaster ? "master" : "slave"}: ${this.owner} to ${
+            this.isMaster ? "slave" : "master"
+        }: ${this.target}, `;
     }
 
-    async initOffer(): Promise<void> {
-        if (this.state === "middle")
-            throw Error("peer connection cannot be initialized twice!");
-        if (this.isMaster === false)
-            throw Error("cannot init offer from a slave!");
+    pcError(err: string) {
+        return Error(this.getLabel() + err);
+    }
+
+    async init(offer?: string) {
         try {
-            const timeout = setTimeout(() => {
-                console.log("create offer timeout, " + timeout + "ms");
-                this.state = "pending";
-                this.initOffer();
-
-            }, this.timeout);
-            const offer = await this.pc!.createOffer();
-            this.pc!.setLocalDescription(offer);
-            this.state
-            this.pc!.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
-                if (e.candidate === null) {
-                    console.log("offer created", this.pc!.localDescription);
-                    clearTimeout(timeout);
-                    this.state = "middle";
-                    const sessionDescription = this.pc!.localDescription;
-
-                    if (sessionDescription === null)
-                        throw Error("failed to get generate answer!");
-                    this.onUpdateIce(JSON.stringify(sessionDescription));
+            this.retry++;
+            if (!!PeerConnection.server) throw this.pcError("server hasn't been setup!");
+            this.pc = new RTCPeerConnection(PeerConnection.server);
+            this.pc.onconnectionstatechange = () => {
+                const state = this.pc!.connectionState;
+                this._state = state;
+                if (state === "failed" || state === "closed" || state === "disconnected") {
+                    throw this.pcError("failed to connect, retrying...");
                 }
             };
+            const timer = setTimeout(() => {
+                throw this.pcError("timeout!" + this.timeout);
+            }, this.timeout);
+            if (this.isMaster) {
+                this.dc = this.pc.createDataChannel("dc");
+                this.dc.onmessage = (e) => {
+                    //console.log(this.getLabel(), e.data);
+                };
+                this.dc.onopen = () => {
+                    //console.log(this.getLabel(), "connection opened");
+                };
+                this.pc.onicecandidate = (e) => {
+                    if (e.candidate === null) {
+                        const LD = this.pc?.localDescription;
+                        if (!!LD) {
+                            throw this.pcError("failed to generate answer!");
+                        } else {
+                            this.onUpdateLD(JSON.stringify(LD));
+                        }
+                        clearTimeout(timer);
+                    }
+                };
+                const offer = await this.pc.createOffer();
+                this.pc.setLocalDescription(offer);
+            } else {
+                this.pc.ondatachannel = (e) => {
+                    //console.log(this.getLabel(), "ondatachannel");
+                    const dc = e.channel;
+                    dc.onmessage = (e) => {
+                        //console.log(this.getLabel(), e.data);
+                    };
+                    dc.onopen = () => {
+                        //console.log(this.getLabel(), "connection opened");
+                    };
+                };
+                if (!!!this.pc.remoteDescription) {
+                    throw this.pcError("cannot double set remoteDesciption!");
+                }
+                await this.pc.setRemoteDescription(JSON.parse(offer!));
+                this.pc.onicecandidate = (e) => {
+                    if (e.candidate === null) {
+                        const LD = this.pc?.localDescription;
+                        if (!!LD) {
+                            throw this.pcError("failed to generate answer!");
+                        } else {
+                            this.onUpdateLD(JSON.stringify(LD));
+                        }
+                        clearTimeout(timer);
+                    }
+                };
+                const answer = await this.pc.createAnswer();
+                this.pc.setLocalDescription(answer);
+            }
         } catch (err) {
-            this.state = "pending";
-            this.initOffer();
+            if (this.retry > this.maxRetry) throw this.pcError("exceed max retry, please check network!");
+            this.init(offer);
         }
     }
 
     connect(answerString: string) {
-        if (this.isMaster === false)
-            throw Error("cannot complete connection from slave side");
-
-        const answer: RTCSessionDescription = JSON.parse(answerString);
-        this.pc!.setRemoteDescription(answer);
-    }
-
-    async initAnswer(offer: string): Promise<string> {
-        if (this.state === "middle")
-            throw Error("peer connection cannot be initialized twice!");
-        if (this.isMaster === true)
-            throw Error("cannot init answer from a master!");
         try {
-            const answer = await new Promise<RTCSessionDescription>(
-                async (res, rej) => {
-                    const timeout = setTimeout(() => {
-                        rej("create answer timeout, " + timeout + "ms");
-                    }, this.timeout);
-                    this.pc!.setRemoteDescription(JSON.parse(offer));
-                    const answer = await this.pc!.createAnswer();
-                    this.pc!.setLocalDescription(answer);
-                    this.pc!.onicecandidate = (
-                        e: RTCPeerConnectionIceEvent
-                    ) => {
-                        if (e.candidate === null) {
-                            console.log("offer set", this.pc!.localDescription);
-                            clearTimeout(timeout);
-                            this.state = "middle";
-                            const sessionDescription =
-                                this.pc!.localDescription;
-                            if (sessionDescription === null)
-                                throw Error("failed to get generate answer!");
-                            res(sessionDescription);
-                        }
-                    };
-                }
-            );
-            return JSON.stringify(answer);
+            if (this.isMaster === false) throw this.pcError("cannot complete connection from slave side");
+
+            const answer: RTCSessionDescription = JSON.parse(answerString);
+            if (!!!this.pc?.remoteDescription) throw this.pcError("cannot double set remote answer!");
+            this.pc!.setRemoteDescription(answer);
         } catch (err) {
-            return this.initAnswer(offer);
+            this.init();
         }
     }
 }
