@@ -1,7 +1,13 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import UserContext from "../../contexts/userContext";
 import { Navigate } from "react-router-dom";
 import { Socket, io } from "socket.io-client";
+import { PeerConnection } from "../../utils/PeerConnection";
+
+interface IPC{
+    
+}
+
 interface Room {
     id: string;
     roomName: string;
@@ -20,6 +26,9 @@ interface User {
     createdRooms?: Room[];
     room?: Room;
 }
+interface PCMap {
+    [id: string]: PeerConnection;
+}
 const Home = () => {
     const { user: curUser, login, signup, signout } = useContext(UserContext);
     const [socket, setSocket] = useState<Socket | null>(null);
@@ -28,8 +37,11 @@ const Home = () => {
     const [joinRoomName, setJoinRoomName] = useState("");
     const [createRoomName, setCreateRoomName] = useState("");
     const [isConnecting, setIsConnecting] = useState(false);
+    const pcRef = useRef<PCMap>({});
 
-    const currentRoom = onlineUsers.find((user) => user.id === curUser.userId)?.room;
+    const currentRoom = onlineUsers.find(
+        (user) => user.id === curUser.userId
+    )?.room;
 
     const isLogin = !(curUser.token === null);
     useEffect(() => {
@@ -41,6 +53,29 @@ const Home = () => {
         });
         setSocket(socket);
     }, [curUser]);
+
+    useEffect(() => {
+        if (!!!socket) return;
+    }, [socket]);
+
+    useEffect(() => {
+        const roomUsers = onlineUsers.filter(
+            (user) => user.room?.id === currentRoom?.id
+        );
+        
+        const pcMap = pcRef.current;
+        roomUsers.forEach((user) => {
+            const owner = +curUser.userId!;
+            const target = +user.id
+            if(owner > target){
+                if(pcMap[target]===undefined){
+                    pcMap[target] = new PeerConnection(owner, target,{onUpdateLD:sendLDs})
+                }
+            }else{
+
+            }
+        });
+    }, [onlineUsers]);
 
     useEffect(() => {
         if (!socket) {
@@ -63,7 +98,7 @@ const Home = () => {
             console.log("disconnect");
         };
         const onConnectError = (err: any) => {
-            alert("connection error, reason:" + err)
+            alert("connection error, reason:" + err);
         };
 
         const onError = (err: any) => {
@@ -90,12 +125,19 @@ const Home = () => {
             socket.off("error", onError);
         };
     }, [socket]);
+
+
+    const sendLDs = () => {
+
+    }
     const handleJoinRoom = () => {
         if (!socket) {
             alert("ws is not connected");
             return;
         }
-        socket.emit("joinroom", joinRoomName, (res:any)=>{console.log("res", res)});
+        socket.emit("joinroom", joinRoomName, (res: any) => {
+            console.log("res", res);
+        });
     };
 
     const handleCreateRoom = () => {
@@ -121,7 +163,9 @@ const Home = () => {
                     "loading"
                 ) : (
                     <div>
-                        <h1>currentRoom: {currentRoom?.roomName || "not joined"}</h1>
+                        <h1>
+                            currentRoom: {currentRoom?.roomName || "not joined"}
+                        </h1>
                         <div>
                             {rooms.map((room) => (
                                 <div key={room.roomName}>{room.roomName}</div>
@@ -137,15 +181,24 @@ const Home = () => {
                             ))}
                         </div>
                         <div>
-                            <input onChange={(e) => setJoinRoomName(e.target.value)} value={joinRoomName} />
+                            <input
+                                onChange={(e) =>
+                                    setJoinRoomName(e.target.value)
+                                }
+                                value={joinRoomName}
+                            />
                             <button onClick={handleJoinRoom}>join room</button>
                         </div>
                         <div>
                             <input
-                                onChange={(e) => setCreateRoomName(e.target.value)}
+                                onChange={(e) =>
+                                    setCreateRoomName(e.target.value)
+                                }
                                 value={createRoomName}
                             />
-                            <button onClick={handleCreateRoom}>create room</button>
+                            <button onClick={handleCreateRoom}>
+                                create room
+                            </button>
                         </div>
                         <div>
                             <button onClick={handleQuitRoom}>quit room</button>

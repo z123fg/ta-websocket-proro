@@ -13,8 +13,7 @@ export class PeerConnection {
     constructor(
         owner: number,
         target: number,
-
-        { timeout, onUpdateLD, maxRetry } = { timeout: 3000, onUpdateLD: () => {}, maxRetry: 3 }
+        { timeout = 3000, onUpdateLD = () => {}, maxRetry = 3 }={}
     ) {
         this.owner = owner;
         this.target = target;
@@ -27,6 +26,10 @@ export class PeerConnection {
     }
     get state() {
         return this._state;
+    }
+
+    get LD(){
+      return this.pc?.localDescription
     }
 
     getLabel() {
@@ -42,12 +45,17 @@ export class PeerConnection {
     async init(offer?: string) {
         try {
             this.retry++;
-            if (!!PeerConnection.server) throw this.pcError("server hasn't been setup!");
+            if (!!PeerConnection.server)
+                throw this.pcError("server hasn't been setup!");
             this.pc = new RTCPeerConnection(PeerConnection.server);
             this.pc.onconnectionstatechange = () => {
                 const state = this.pc!.connectionState;
                 this._state = state;
-                if (state === "failed" || state === "closed" || state === "disconnected") {
+                if (
+                    state === "failed" ||
+                    state === "closed" ||
+                    state === "disconnected"
+                ) {
                     throw this.pcError("failed to connect, retrying...");
                 }
             };
@@ -105,17 +113,22 @@ export class PeerConnection {
                 this.pc.setLocalDescription(answer);
             }
         } catch (err) {
-            if (this.retry > this.maxRetry) throw this.pcError("exceed max retry, please check network!");
+            if (this.retry > this.maxRetry)
+                throw this.pcError("exceed max retry, please check network!");
             this.init(offer);
         }
     }
 
     connect(answerString: string) {
         try {
-            if (this.isMaster === false) throw this.pcError("cannot complete connection from slave side");
+            if (this.isMaster === false)
+                throw this.pcError(
+                    "cannot complete connection from slave side"
+                );
 
             const answer: RTCSessionDescription = JSON.parse(answerString);
-            if (!!!this.pc?.remoteDescription) throw this.pcError("cannot double set remote answer!");
+            if (!!!this.pc?.remoteDescription)
+                throw this.pcError("cannot double set remote answer!");
             this.pc!.setRemoteDescription(answer);
         } catch (err) {
             this.init();
