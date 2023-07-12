@@ -1,9 +1,9 @@
 import { MouseEvent } from "react";
 
 export interface UserInfo {
-    username: string | null;
-    token:  string | null;
-    userId:  string | null;
+    username: string;
+    token:  string ;
+    userId:  number;
 }
 
 export interface IAuthForm {
@@ -12,8 +12,8 @@ export interface IAuthForm {
 }
 
 export interface IUserContext {
-    user: UserInfo;
+    user: UserInfo|null;
     login: (user: IAuthForm) =>void;
     signup: (user: IAuthForm) =>void;
-    signout: (user: IAuthForm) =>void;
+    signout: () =>void;
 }

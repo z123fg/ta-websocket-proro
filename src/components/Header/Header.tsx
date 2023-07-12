@@ -4,10 +4,10 @@ import { Link } from "react-router-dom";
 
 const Header = () => {
     const { user, login, signup, signout } = useContext(UserContext);
-    const isLogin = !(user.token === null);
+    const isLogin = !(user === null);
     const handleSignout = () => {
-
-    }
+        signout();
+    };
     return (
         <header>
             {!isLogin ? (

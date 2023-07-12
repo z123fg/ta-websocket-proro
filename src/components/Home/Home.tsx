@@ -1,12 +1,10 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
-import UserContext from "../../contexts/userContext";
-import { Navigate } from "react-router-dom";
+import React, { FC, useEffect, useMemo, useRef, useState } from "react";
 import { Socket, io } from "socket.io-client";
 import { PeerConnection } from "../../utils/PeerConnection";
-
-interface IPC{
-    
-}
+import { IAuthForm, IUserContext, UserInfo } from "../../types/types";
+import PeerConnectionsManager from "../../utils/PeerConnectionsManager";
+import { ISD } from "../../hooks/usePeerConnection";
+import { prettyPrint } from "prettier-print";
 
 interface Room {
     id: string;
@@ -16,66 +14,69 @@ interface Room {
     history?: any[];
 }
 
-interface User {
-    id: string;
+export interface User {
+    id: number;
     username: string;
     ICE?: string;
     lastLogin?: Date;
     lastActive?: Date;
     online?: boolean;
     createdRooms?: Room[];
-    room?: Room;
+    room: Room;
 }
 interface PCMap {
     [id: string]: PeerConnection;
 }
-const Home = () => {
-    const { user: curUser, login, signup, signout } = useContext(UserContext);
+export interface IHomeProps {
+    user: UserInfo;
+    login: (user: IAuthForm) => void;
+    signup: (user: IAuthForm) => void;
+    signout: (user: IAuthForm) => void;
+}
+PeerConnection.server = {
+    iceServers: [
+        {
+            urls: ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302","stun:stun4.l.google.com:19302"],
+        },
+    ],
+    iceCandidatePoolSize: 0,
+};
+
+const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [rooms, setRooms] = useState<Room[]>([]);
     const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
     const [joinRoomName, setJoinRoomName] = useState("");
     const [createRoomName, setCreateRoomName] = useState("");
     const [isConnecting, setIsConnecting] = useState(false);
-    const pcRef = useRef<PCMap>({});
-
-    const currentRoom = onlineUsers.find(
-        (user) => user.id === curUser.userId
-    )?.room;
-
-    const isLogin = !(curUser.token === null);
+    const PCMRef = useRef(new PeerConnectionsManager(curUser, socket));
+    const currentRoom = useMemo(
+        () => onlineUsers.find((user) => user.id === curUser.userId)?.room,
+        [onlineUsers, curUser]
+    );
+    const roomUsers = useMemo(
+        
+        () => onlineUsers.filter((user) => user.room?.id === currentRoom?.id),
+        [currentRoom, onlineUsers]
+    );
     useEffect(() => {
         if (!curUser.token) return;
-        const socket = io("http://localhost:3002", {
+        const socket = io("http://192.168.1.207:3002", {
             auth: {
                 token: curUser.token,
             },
         });
+        PCMRef.current.updateCurUser(curUser);
         setSocket(socket);
     }, [curUser]);
 
     useEffect(() => {
-        if (!!!socket) return;
+        PCMRef.current.updateSocket(socket);
     }, [socket]);
 
     useEffect(() => {
-        const roomUsers = onlineUsers.filter(
-            (user) => user.room?.id === currentRoom?.id
-        );
-        
-        const pcMap = pcRef.current;
-        roomUsers.forEach((user) => {
-            const owner = +curUser.userId!;
-            const target = +user.id
-            if(owner > target){
-                if(pcMap[target]===undefined){
-                    pcMap[target] = new PeerConnection(owner, target,{onUpdateLD:sendLDs})
-                }
-            }else{
-
-            }
-        });
-    }, [onlineUsers]);
+        PCMRef.current.updateRoomUsers(roomUsers);
+    }, [roomUsers]);
 
     useEffect(() => {
         if (!socket) {
@@ -105,7 +106,10 @@ const Home = () => {
             alert(err);
         };
         const onLobby = () => {};
-        console.log("trying to connect");
+        const onUpdateSDs = (SDs: ISD[]) => {
+            PCMRef.current.updateSDs(SDs);
+        };
+        socket.on("updatesds", onUpdateSDs);
         socket.on("connect", onConnect);
         socket.on("connect_error", onConnectError);
         socket.on("disconnect", onDisconnect);
@@ -126,17 +130,25 @@ const Home = () => {
         };
     }, [socket]);
 
+    useEffect(() => {
+        const interval = setInterval(() => {
+            prettyPrint(
+                null,
+                Object.entries(PCMRef.current.PCMap).map(([target, pc]) => {
+                    return { target, state: pc.state, isMaster: pc.isMaster, ld: pc.LD, rd: pc.RD };
+                }), onlineUsers
+            );
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [onlineUsers]);
 
-    const sendLDs = () => {
-
-    }
     const handleJoinRoom = () => {
         if (!socket) {
             alert("ws is not connected");
             return;
         }
         socket.emit("joinroom", joinRoomName, (res: any) => {
-            console.log("res", res);
+           // console.log("res", res);
         });
     };
 
@@ -158,55 +170,37 @@ const Home = () => {
     };
     return (
         <div>
-            {isLogin ? (
-                isConnecting ? (
-                    "loading"
-                ) : (
-                    <div>
-                        <h1>
-                            currentRoom: {currentRoom?.roomName || "not joined"}
-                        </h1>
-                        <div>
-                            {rooms.map((room) => (
-                                <div key={room.roomName}>{room.roomName}</div>
-                            ))}
-                        </div>
-                        <div>
-                            {onlineUsers.map((user) => (
-                                <div key={user.username}>
-                                    {user.username}
-                                    {` in room: `}
-                                    {user.room?.roomName}
-                                </div>
-                            ))}
-                        </div>
-                        <div>
-                            <input
-                                onChange={(e) =>
-                                    setJoinRoomName(e.target.value)
-                                }
-                                value={joinRoomName}
-                            />
-                            <button onClick={handleJoinRoom}>join room</button>
-                        </div>
-                        <div>
-                            <input
-                                onChange={(e) =>
-                                    setCreateRoomName(e.target.value)
-                                }
-                                value={createRoomName}
-                            />
-                            <button onClick={handleCreateRoom}>
-                                create room
-                            </button>
-                        </div>
-                        <div>
-                            <button onClick={handleQuitRoom}>quit room</button>
-                        </div>
-                    </div>
-                )
+            {isConnecting ? (
+                "loading"
             ) : (
-                <Navigate to="/login" />
+                <div>
+                    <h1>currentRoom: {currentRoom?.roomName || "not joined"}</h1>
+                    <div>
+                        {rooms.map((room) => (
+                            <div key={room.roomName}>{room.roomName}</div>
+                        ))}
+                    </div>
+                    <div>
+                        {onlineUsers.map((user) => (
+                            <div key={user.username}>
+                                {user.username}
+                                {` in room: `}
+                                {user.room?.roomName}
+                            </div>
+                        ))}
+                    </div>
+                    <div>
+                        <input onChange={(e) => setJoinRoomName(e.target.value)} value={joinRoomName} />
+                        <button onClick={handleJoinRoom}>join room</button>
+                    </div>
+                    <div>
+                        <input onChange={(e) => setCreateRoomName(e.target.value)} value={createRoomName} />
+                        <button onClick={handleCreateRoom}>create room</button>
+                    </div>
+                    <div>
+                        <button onClick={handleQuitRoom}>quit room</button>
+                    </div>
+                </div>
             )}
         </div>
     );

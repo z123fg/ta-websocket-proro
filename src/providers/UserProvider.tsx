@@ -9,7 +9,7 @@ interface UserProviderProps {
     children: ReactNode;
 }
 const UserProvider: FC<UserProviderProps> = ({ children }) => {
-    const [user, setUser] = useState<UserInfo>({ userId: null, username: null, token: null });
+    const [user, setUser] = useState<UserInfo|null>(null);
     const navigate = useNavigate();
 
     const login = async (user: IAuthForm) => {
@@ -32,7 +32,7 @@ const UserProvider: FC<UserProviderProps> = ({ children }) => {
     };
 
     const signout = () => {
-        setUser({ username: null, token: null, userId: null });
+        setUser(null);
         navigate("/login");
     };
     return <UserContext.Provider value={{ user, login, signup, signout }}>{children}</UserContext.Provider>;
