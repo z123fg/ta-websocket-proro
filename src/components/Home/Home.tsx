@@ -3,7 +3,7 @@ import { Socket, io } from "socket.io-client";
 import { PeerConnection } from "../../utils/PeerConnection";
 import { IAuthForm, IUserContext, UserInfo } from "../../types/types";
 import PeerConnectionsManager from "../../utils/PeerConnectionsManager";
-import { ISD } from "../../hooks/usePeerConnection";
+
 import { prettyPrint } from "prettier-print";
 
 interface Room {
@@ -33,10 +33,25 @@ export interface IHomeProps {
     signup: (user: IAuthForm) => void;
     signout: (user: IAuthForm) => void;
 }
+
+export interface SDMessage {
+    ownerId: string;
+    SD: string;
+    type: string;
+}
+
+export interface IStatusMessage {
+    onlineUsers: User[];
+    rooms: Room[]
+}
 PeerConnection.server = {
     iceServers: [
         {
-            urls: ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302","stun:stun4.l.google.com:19302"],
+            urls: [
+                "stun:stun1.l.google.com:19302",
+                "stun:stun2.l.google.com:19302",
+                "stun:stun4.l.google.com:19302",
+            ],
         },
     ],
     iceCandidatePoolSize: 0,
@@ -55,13 +70,12 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
         [onlineUsers, curUser]
     );
     const roomUsers = useMemo(
-        
         () => onlineUsers.filter((user) => user.room?.id === currentRoom?.id),
         [currentRoom, onlineUsers]
     );
     useEffect(() => {
         if (!curUser.token) return;
-        const socket = io("http://192.168.1.207:3002", {
+        const socket = io("http://192.168.1.206:3002", {
             auth: {
                 token: curUser.token,
             },
@@ -79,22 +93,15 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
     }, [roomUsers]);
 
     useEffect(() => {
-        if (!socket) {
-            //alert("ws is not connected");
-            setIsConnecting(true);
-            return;
-        }
-        setIsConnecting(false);
         const onConnect = () => {
             console.log("connect");
         };
-        const onUpdateOnlineUser = (users: User[]) => {
-            setOnlineUsers(users);
+        const onStatus = (statusMessage:IStatusMessage) => {
+            const {rooms, onlineUsers} = statusMessage;
+            setOnlineUsers(onlineUsers)
+            setRooms(rooms)
         };
 
-        const onUpdateRooms = (rooms: Room[]) => {
-            setRooms(rooms);
-        };
         const onDisconnect = () => {
             console.log("disconnect");
         };
@@ -106,27 +113,25 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
             alert(err);
         };
         const onLobby = () => {};
-        const onUpdateSDs = (SDs: ISD[]) => {
-            PCMRef.current.updateSDs(SDs);
+        const onSD = (message: SDMessage) => {
+            console.log("received!")
+            PCMRef.current.updateSD(message)
         };
-        socket.on("updatesds", onUpdateSDs);
-        socket.on("connect", onConnect);
-        socket.on("connect_error", onConnectError);
-        socket.on("disconnect", onDisconnect);
-        socket.on("updateonlineusers", onUpdateOnlineUser);
-        socket.on("updaterooms", onUpdateRooms);
-        socket.on("lobby", onLobby);
-        socket.on("updaterooms", onUpdateRooms);
-        socket.on("error", onError);
+        socket?.on("sd", onSD);
+        socket?.on("connect", onConnect);
+        socket?.on("connect_error", onConnectError);
+        socket?.on("disconnect", onDisconnect);
+        socket?.on("status", onStatus);
+        socket?.on("lobby", onLobby);
+        socket?.on("error", onError);
         return () => {
-            socket.off("connect_error", onConnectError);
-            socket.off("connect", onConnect);
-            socket.off("disconnect", onDisconnect);
-            socket.off("updateonlineusers", onUpdateOnlineUser);
-            socket.off("updaterooms", onUpdateRooms);
-            socket.off("lobby", onLobby);
-            socket.off("updaterooms", onUpdateRooms);
-            socket.off("error", onError);
+            socket?.off("sd", onSD);
+            socket?.off("connect_error", onConnectError);
+            socket?.off("connect", onConnect);
+            socket?.off("disconnect", onDisconnect);
+            socket?.off("status", onStatus);
+            socket?.off("lobby", onLobby);
+            socket?.off("error", onError);
         };
     }, [socket]);
 
@@ -135,8 +140,14 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
             prettyPrint(
                 null,
                 Object.entries(PCMRef.current.PCMap).map(([target, pc]) => {
-                    return { target, state: pc.state, isMaster: pc.isMaster, ld: pc.LD, rd: pc.RD };
-                }), onlineUsers
+                    return {
+                        target,
+                        state: pc.state,
+                        ld: pc.LD,
+                        rd: pc.RD,
+                    };
+                }),
+                onlineUsers
             );
         }, 1000);
         return () => clearInterval(interval);
@@ -148,7 +159,7 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
             return;
         }
         socket.emit("joinroom", joinRoomName, (res: any) => {
-           // console.log("res", res);
+            // console.log("res", res);
         });
     };
 
@@ -174,7 +185,9 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
                 "loading"
             ) : (
                 <div>
-                    <h1>currentRoom: {currentRoom?.roomName || "not joined"}</h1>
+                    <h1>
+                        currentRoom: {currentRoom?.roomName || "not joined"}
+                    </h1>
                     <div>
                         {rooms.map((room) => (
                             <div key={room.roomName}>{room.roomName}</div>
@@ -190,11 +203,17 @@ const Home: FC<IHomeProps> = ({ user: curUser, login, signup, signout }) => {
                         ))}
                     </div>
                     <div>
-                        <input onChange={(e) => setJoinRoomName(e.target.value)} value={joinRoomName} />
+                        <input
+                            onChange={(e) => setJoinRoomName(e.target.value)}
+                            value={joinRoomName}
+                        />
                         <button onClick={handleJoinRoom}>join room</button>
                     </div>
                     <div>
-                        <input onChange={(e) => setCreateRoomName(e.target.value)} value={createRoomName} />
+                        <input
+                            onChange={(e) => setCreateRoomName(e.target.value)}
+                            value={createRoomName}
+                        />
                         <button onClick={handleCreateRoom}>create room</button>
                     </div>
                     <div>
